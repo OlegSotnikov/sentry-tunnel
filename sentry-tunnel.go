@@ -132,6 +132,12 @@ func copyHeaders(src http.Header, dst http.Header) {
     if xff := src.Get("X-Forwarded-For"); xff != "" {
         dst.Set("X-Forwarded-For", xff)
     }
+    if cci := src.Get("CF-Connecting-IP"); cci != "" {
+        dst.Set("CF-Connecting-IP", cci)
+    }
+    if xri := src.Get("X-Real-IP"); xri != "" {
+        dst.Set("X-Real-IP", xri)
+    }
     if orig := src.Get("Origin"); orig != "" {
         dst.Set("Origin", orig)
     }

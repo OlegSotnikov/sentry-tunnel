@@ -59,7 +59,7 @@ func main() {
 				http.Error(w, "Error compressing request body", http.StatusInternalServerError)
 				return
 			}
-			sendCompressed(w, r, body, sentryHost)
+			sendCompressed(w, r, body, sentryHost, handlerPath)
 
 		case "decompress":
 			body, err = decompressRequestBody(r)
@@ -170,9 +170,9 @@ func parseAndForward(w http.ResponseWriter, r *http.Request, body []byte, sentry
 	io.Copy(w, io.NopCloser(bytes.NewReader(responseBytes)))
 }
 
-func sendCompressed(w http.ResponseWriter, r *http.Request, body []byte, sentryHost string) {
+func sendCompressed(w http.ResponseWriter, r *http.Request, body []byte, sentryHost string, handlerPath string) {
 
-	upstreamURL := fmt.Sprintf("https://%s%s", sentryHost, r.URL.Path)
+	upstreamURL := fmt.Sprintf("https://%s%s", sentryHost, handlerPath)
 	proxyReq, err := http.NewRequest(http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		log.Printf("Error creating proxy request: %v", err)
@@ -263,7 +263,7 @@ func decompressRequestBody(r *http.Request) ([]byte, error) {
 	if err != nil {
 		log.Printf("Error during decompression: %v", err)
 	} else {
-		log.Printf("Decompressed body: %s", string(body)) // Log the decompressed body
+		//log.Printf("Decompressed body: %s", string(body)) // Log the decompressed body
 	}
 
 	return body, err
@@ -275,7 +275,7 @@ func compressRequestBody(r *http.Request) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Original body: %s", string(body)) // Log the original body before compression
+	//log.Printf("Original body: %s", string(body)) // Log the original body before compression
 
 	var buf bytes.Buffer
 	zstdWriter, err := zstd.NewWriter(&buf)

@@ -171,22 +171,22 @@ func parseAndForward(w http.ResponseWriter, r *http.Request, body []byte, sentry
 }
 
 func sendCompressed(w http.ResponseWriter, r *http.Request, body []byte, sentryHost string, handlerPath string) {
-
 	upstreamURL := fmt.Sprintf("https://%s%s", sentryHost, handlerPath)
+
+	// Create a new request with the compressed body
 	proxyReq, err := http.NewRequest(http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		log.Printf("Error creating proxy request: %v", err)
 		http.Error(w, "Error creating proxy request", http.StatusInternalServerError)
 		return
 	}
+
 	copyHeaders(r.Header, proxyReq.Header)
 	proxyReq.Header.Set("Content-Encoding", "zstd")
 	proxyReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
 
-	log.Printf("Compressed Request Prepared")
 	client := &http.Client{}
 	resp, err := client.Do(proxyReq)
-	log.Printf("Compressed Request Executed")
 	if err != nil {
 		log.Printf("Error tunneling to Sentry: %v", err)
 		http.Error(w, "Error tunneling to Sentry", http.StatusBadGateway)
@@ -239,6 +239,18 @@ func decompressRequestBody(r *http.Request) ([]byte, error) {
 
 	var body []byte
 	var err error
+	var originalSize int
+
+	// Get original compressed body size
+	compressedBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	originalSize = len(compressedBody)
+	log.Printf("Compressed body size: %d bytes", originalSize)
+
+	// Reset the reader for decompression after reading compressed body
+	r.Body = io.NopCloser(bytes.NewReader(compressedBody))
 
 	if contentEncoding == "zstd" {
 		log.Println("Using zstd decompression")
@@ -265,7 +277,9 @@ func decompressRequestBody(r *http.Request) ([]byte, error) {
 	if err != nil {
 		log.Printf("Error during decompression: %v", err)
 	} else {
-		//log.Printf("Decompressed body: %s", string(body)) // Log the decompressed body
+		decompressedSize := len(body)
+		log.Printf("Decompressed body size: %d bytes", decompressedSize)
+		log.Printf("Decompression ratio: %.2f", float64(decompressedSize)/float64(originalSize)) // Log decompression ratio
 	}
 
 	return body, err
@@ -277,7 +291,9 @@ func compressRequestBody(r *http.Request) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	//log.Printf("Original body: %s", string(body)) // Log the original body before compression
+
+	originalSize := len(body)
+	log.Printf("Original body size: %d bytes", originalSize) // Log the original body size
 
 	var buf bytes.Buffer
 	zstdWriter, err := zstd.NewWriter(&buf)
@@ -292,6 +308,9 @@ func compressRequestBody(r *http.Request) ([]byte, error) {
 		return nil, err
 	}
 
-	log.Printf("Compressed body size: %d bytes", buf.Len()) // Log the compressed body size
+	compressedSize := buf.Len()
+	log.Printf("Compressed body size: %d bytes", compressedSize)                         // Log the compressed body size
+	log.Printf("Compression ratio: %.2f", float64(originalSize)/float64(compressedSize)) // Log compression ratio
+
 	return buf.Bytes(), nil
 }

@@ -233,10 +233,13 @@ func copyHeaders(src http.Header, dst http.Header) {
 // Decompress the request body if needed
 func decompressRequestBody(r *http.Request) ([]byte, error) {
 	contentEncoding := r.Header.Get("Content-Encoding")
+	log.Printf("Decompressing with Content-Encoding: %s", contentEncoding) // Log the content encoding
+
 	var body []byte
 	var err error
 
 	if contentEncoding == "zstd" {
+		log.Println("Using zstd decompression")
 		zstdReader, err := zstd.NewReader(r.Body)
 		if err != nil {
 			return nil, err
@@ -244,6 +247,7 @@ func decompressRequestBody(r *http.Request) ([]byte, error) {
 		defer zstdReader.Close()
 		body, err = io.ReadAll(zstdReader)
 	} else if contentEncoding == "deflate" {
+		log.Println("Using deflate decompression")
 		zlibReader, err := zlib.NewReader(r.Body)
 		if err != nil {
 			return nil, err
@@ -251,8 +255,15 @@ func decompressRequestBody(r *http.Request) ([]byte, error) {
 		defer zlibReader.Close()
 		body, err = io.ReadAll(zlibReader)
 	} else {
+		log.Println("No compression, reading body directly")
 		// If no compression, just read the body as is
 		body, err = io.ReadAll(r.Body)
+	}
+
+	if err != nil {
+		log.Printf("Error during decompression: %v", err)
+	} else {
+		log.Printf("Decompressed body: %s", string(body)) // Log the decompressed body
 	}
 
 	return body, err
@@ -264,6 +275,7 @@ func compressRequestBody(r *http.Request) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("Original body: %s", string(body)) // Log the original body before compression
 
 	var buf bytes.Buffer
 	zstdWriter, err := zstd.NewWriter(&buf)
@@ -274,8 +286,10 @@ func compressRequestBody(r *http.Request) ([]byte, error) {
 	zstdWriter.Close()
 
 	if err != nil {
+		log.Printf("Error during compression: %v", err)
 		return nil, err
 	}
 
+	log.Printf("Compressed body size: %d bytes", buf.Len()) // Log the compressed body size
 	return buf.Bytes(), nil
 }

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -286,6 +287,7 @@ func decompressRequestBody(r *http.Request) ([]byte, error) {
 }
 
 // Compress the request body using Zstandard
+// Compress the request body using Zstandard with a configurable compression level
 func compressRequestBody(r *http.Request) ([]byte, error) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -295,8 +297,21 @@ func compressRequestBody(r *http.Request) ([]byte, error) {
 	originalSize := len(body)
 	log.Printf("Original body size: %d bytes", originalSize) // Log the original body size
 
+	// Get compression level from environment, default to 3 if not set
+	compressionLevelStr := os.Getenv("COMPRESSION_LEVEL")
+	compressionLevel := 3 // Default compression level
+	if compressionLevelStr != "" {
+		parsedLevel, err := strconv.Atoi(compressionLevelStr)
+		if err != nil {
+			log.Printf("Invalid compression level: %s, using default level: %d", compressionLevelStr, compressionLevel)
+		} else {
+			compressionLevel = parsedLevel
+		}
+	}
+	log.Printf("Using compression level: %d", compressionLevel)
+
 	var buf bytes.Buffer
-	zstdWriter, err := zstd.NewWriter(&buf)
+	zstdWriter, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.EncoderLevel(compressionLevel)))
 	if err != nil {
 		return nil, err
 	}

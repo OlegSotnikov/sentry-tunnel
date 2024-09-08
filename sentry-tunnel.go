@@ -171,22 +171,22 @@ func parseAndForward(w http.ResponseWriter, r *http.Request, body []byte, sentry
 }
 
 func sendCompressed(w http.ResponseWriter, r *http.Request, body []byte, sentryHost string, handlerPath string) {
-
 	upstreamURL := fmt.Sprintf("https://%s%s", sentryHost, handlerPath)
+
+	// Create a new request with the compressed body
 	proxyReq, err := http.NewRequest(http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		log.Printf("Error creating proxy request: %v", err)
 		http.Error(w, "Error creating proxy request", http.StatusInternalServerError)
 		return
 	}
+
 	copyHeaders(r.Header, proxyReq.Header)
 	proxyReq.Header.Set("Content-Encoding", "zstd")
 	proxyReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
 
-	log.Printf("Compressed Request Prepared")
 	client := &http.Client{}
 	resp, err := client.Do(proxyReq)
-	log.Printf("Compressed Request Executed")
 	if err != nil {
 		log.Printf("Error tunneling to Sentry: %v", err)
 		http.Error(w, "Error tunneling to Sentry", http.StatusBadGateway)

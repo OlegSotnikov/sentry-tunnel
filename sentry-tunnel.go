@@ -263,7 +263,7 @@ func decompressRequestBody(r *http.Request) ([]byte, error) {
 	if err != nil {
 		log.Printf("Error during decompression: %v", err)
 	} else {
-		log.Printf("Decompressed body: %s", string(body)) // Log the decompressed body
+		//log.Printf("Decompressed body: %s", string(body)) // Log the decompressed body
 	}
 
 	return body, err
@@ -275,7 +275,7 @@ func compressRequestBody(r *http.Request) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Original body: %s", string(body)) // Log the original body before compression
+	//log.Printf("Original body: %s", string(body)) // Log the original body before compression
 
 	var buf bytes.Buffer
 	zstdWriter, err := zstd.NewWriter(&buf)

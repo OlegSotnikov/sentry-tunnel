@@ -1,6 +1,3 @@
-//go:build (darwin && cgo) || linux
-// +build darwin,cgo linux
-
 package main
 
 import (
@@ -15,9 +12,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
-// go:build (darwin && cgo) || linux
 func main() {
 	sentryHost := os.Getenv("SENTRY_HOST")
 	if sentryHost == "" {
@@ -236,16 +233,14 @@ func copyHeaders(src http.Header, dst http.Header) {
 	}
 }
 
-// Decompress the request body using DataDog Zstandard
+// Decompress the request body using DataDog Zstandard with timing
 func decompressRequestBody(r *http.Request) ([]byte, error) {
+	start := time.Now() // Start timer
 	contentEncoding := r.Header.Get("Content-Encoding")
-	log.Printf("Decompressing with Content-Encoding: %s", contentEncoding) // Log the content encoding
-
 	var body []byte
 	var err error
 
 	if contentEncoding == "zstd" {
-		log.Println("Using Zstd decompression")
 		compressedBody, err := io.ReadAll(r.Body)
 		if err != nil {
 			return nil, err
@@ -253,34 +248,30 @@ func decompressRequestBody(r *http.Request) ([]byte, error) {
 
 		// Decompress the body
 		body, err = zstd.Decompress(nil, compressedBody)
-		if err != nil {
-			log.Printf("Error during Zstd decompression: %v", err)
-			return nil, err
-		}
 	} else {
-		log.Println("No compression, reading body directly")
 		// If no compression, just read the body as is
 		body, err = io.ReadAll(r.Body)
 	}
 
+	duration := time.Since(start) // Calculate time taken
 	if err != nil {
-		log.Printf("Error during decompression: %v", err)
+		log.Printf("Error during decompression: %v, Time taken: %s", err, duration)
 	} else {
-		log.Printf("Decompressed body size: %d bytes", len(body))
+		log.Printf("Decompressed body size: %d bytes, Time taken: %s", len(body), duration)
 	}
 
 	return body, err
 }
 
-// Compress the request body using DataDog Zstandard
+// Compress the request body using DataDog Zstandard with timing
 func compressRequestBody(r *http.Request) ([]byte, error) {
+	start := time.Now() // Start timer
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, err
 	}
 
 	originalSize := len(body)
-	log.Printf("Original body size: %d bytes", originalSize) // Log the original body size
 
 	// Get compression level from environment, default to 3 if not set
 	compressionLevelStr := os.Getenv("COMPRESSION_LEVEL")
@@ -290,22 +281,21 @@ func compressRequestBody(r *http.Request) ([]byte, error) {
 		if err != nil {
 			log.Printf("Invalid compression level: %s, using default level: %d", compressionLevelStr, compressionLevel)
 		} else {
-			// Validate compression level
 			compressionLevel = parsedLevel
 		}
 	}
-	log.Printf("Using compression level: %d", compressionLevel)
 
 	// Compress using DataDog's Zstandard at the given compression level
 	compressedBody, err := zstd.CompressLevel(nil, body, compressionLevel)
+	duration := time.Since(start) // Calculate time taken
 	if err != nil {
-		log.Printf("Error during Zstd compression: %v", err)
+		log.Printf("Error during compression: %v, Time taken: %s", err, duration)
 		return nil, err
 	}
 
 	compressedSize := len(compressedBody)
-	log.Printf("Compressed body size: %d bytes", compressedSize)                         // Log the compressed body size
-	log.Printf("Compression ratio: %.2f", float64(originalSize)/float64(compressedSize)) // Log compression ratio
+	log.Printf("Compressed body size: %d bytes, Original size: %d bytes, Compression ratio: %.2f, Time taken: %s",
+		compressedSize, originalSize, float64(originalSize)/float64(compressedSize), duration)
 
 	return compressedBody, nil
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/flate"
+	"compress/zlib"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -113,21 +114,21 @@ func main() {
 
 		// Compress the body using deflate with the configured compression level
 		var compressedBody bytes.Buffer
-		flateWriter, err := flate.NewWriter(&compressedBody, compressionLevel)
+		zlibWriter, err := zlib.NewWriterLevel(&compressedBody, compressionLevel)
 		if err != nil {
-			log.Printf("Error creating deflate writer: %v", err)
+			log.Printf("Error creating zlib writer: %v", err)
 			http.Error(w, "Error compressing request body", http.StatusInternalServerError)
 			return
 		}
 
-		if _, err := flateWriter.Write(body); err != nil {
-			log.Printf("Error writing to deflate writer: %v", err)
+		if _, err := zlibWriter.Write(body); err != nil {
+			log.Printf("Error writing to zlib writer: %v", err)
 			http.Error(w, "Error compressing request body", http.StatusInternalServerError)
 			return
 		}
 
-		if err := flateWriter.Close(); err != nil {
-			log.Printf("Error closing deflate writer: %v", err)
+		if err := zlibWriter.Close(); err != nil {
+			log.Printf("Error closing zlib writer: %v", err)
 			http.Error(w, "Error compressing request body", http.StatusInternalServerError)
 			return
 		}

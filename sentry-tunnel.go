@@ -1,11 +1,13 @@
+//go:build (darwin && cgo) || linux
+// +build darwin,cgo linux
+
 package main
 
 import (
 	"bytes"
-	"compress/zlib"
 	"encoding/json"
 	"fmt"
-	"github.com/klauspost/compress/zstd"
+	"github.com/DataDog/zstd"
 	"io"
 	"log"
 	"net/http"
@@ -15,6 +17,7 @@ import (
 	"strings"
 )
 
+// go:build (darwin && cgo) || linux
 func main() {
 	sentryHost := os.Getenv("SENTRY_HOST")
 	if sentryHost == "" {
@@ -233,42 +236,27 @@ func copyHeaders(src http.Header, dst http.Header) {
 	}
 }
 
-// Decompress the request body if needed
+// Decompress the request body using DataDog Zstandard
 func decompressRequestBody(r *http.Request) ([]byte, error) {
 	contentEncoding := r.Header.Get("Content-Encoding")
 	log.Printf("Decompressing with Content-Encoding: %s", contentEncoding) // Log the content encoding
 
 	var body []byte
 	var err error
-	var originalSize int
-
-	// Get original compressed body size
-	compressedBody, err := io.ReadAll(r.Body)
-	if err != nil {
-		return nil, err
-	}
-	originalSize = len(compressedBody)
-	log.Printf("Compressed body size: %d bytes", originalSize)
-
-	// Reset the reader for decompression after reading compressed body
-	r.Body = io.NopCloser(bytes.NewReader(compressedBody))
 
 	if contentEncoding == "zstd" {
-		log.Println("Using zstd decompression")
-		zstdReader, err := zstd.NewReader(r.Body)
+		log.Println("Using Zstd decompression")
+		compressedBody, err := io.ReadAll(r.Body)
 		if err != nil {
 			return nil, err
 		}
-		defer zstdReader.Close()
-		body, err = io.ReadAll(zstdReader)
-	} else if contentEncoding == "deflate" {
-		log.Println("Using deflate decompression")
-		zlibReader, err := zlib.NewReader(r.Body)
+
+		// Decompress the body
+		body, err = zstd.Decompress(nil, compressedBody)
 		if err != nil {
+			log.Printf("Error during Zstd decompression: %v", err)
 			return nil, err
 		}
-		defer zlibReader.Close()
-		body, err = io.ReadAll(zlibReader)
 	} else {
 		log.Println("No compression, reading body directly")
 		// If no compression, just read the body as is
@@ -278,16 +266,13 @@ func decompressRequestBody(r *http.Request) ([]byte, error) {
 	if err != nil {
 		log.Printf("Error during decompression: %v", err)
 	} else {
-		decompressedSize := len(body)
-		log.Printf("Decompressed body size: %d bytes", decompressedSize)
-		log.Printf("Decompression ratio: %.2f", float64(decompressedSize)/float64(originalSize)) // Log decompression ratio
+		log.Printf("Decompressed body size: %d bytes", len(body))
 	}
 
 	return body, err
 }
 
-// Compress the request body using Zstandard
-// Compress the request body using Zstandard with a configurable compression level
+// Compress the request body using DataDog Zstandard
 func compressRequestBody(r *http.Request) ([]byte, error) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -305,27 +290,22 @@ func compressRequestBody(r *http.Request) ([]byte, error) {
 		if err != nil {
 			log.Printf("Invalid compression level: %s, using default level: %d", compressionLevelStr, compressionLevel)
 		} else {
+			// Validate compression level
 			compressionLevel = parsedLevel
 		}
 	}
 	log.Printf("Using compression level: %d", compressionLevel)
 
-	var buf bytes.Buffer
-	zstdWriter, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.EncoderLevel(compressionLevel)))
+	// Compress using DataDog's Zstandard at the given compression level
+	compressedBody, err := zstd.CompressLevel(nil, body, compressionLevel)
 	if err != nil {
-		return nil, err
-	}
-	_, err = zstdWriter.Write(body)
-	zstdWriter.Close()
-
-	if err != nil {
-		log.Printf("Error during compression: %v", err)
+		log.Printf("Error during Zstd compression: %v", err)
 		return nil, err
 	}
 
-	compressedSize := buf.Len()
+	compressedSize := len(compressedBody)
 	log.Printf("Compressed body size: %d bytes", compressedSize)                         // Log the compressed body size
 	log.Printf("Compression ratio: %.2f", float64(originalSize)/float64(compressedSize)) // Log compression ratio
 
-	return buf.Bytes(), nil
+	return compressedBody, nil
 }

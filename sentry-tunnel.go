@@ -2,10 +2,9 @@ package main
 
 import (
 	"bytes"
-	"compress/flate"
-	"compress/zlib"
 	"encoding/json"
 	"fmt"
+	"github.com/andybalholm/brotli" // Import Brotli compression package
 	"io"
 	"io/ioutil"
 	"log"
@@ -39,7 +38,7 @@ func main() {
 		handlerPath = "/s" // Default path
 	}
 
-	compressionLevel := flate.DefaultCompression
+	compressionLevel := brotli.DefaultCompression
 	if levelStr := os.Getenv("COMPRESSION_LEVEL"); levelStr != "" {
 		if level, err := strconv.Atoi(levelStr); err == nil {
 			compressionLevel = level
@@ -112,23 +111,18 @@ func main() {
 		startTime := time.Now()
 		originalSize := len(body)
 
-		// Compress the body using deflate with the configured compression level
+		// Compress the body using Brotli with the configured compression level
 		var compressedBody bytes.Buffer
-		zlibWriter, err := zlib.NewWriterLevel(&compressedBody, compressionLevel)
-		if err != nil {
-			log.Printf("Error creating zlib writer: %v", err)
+		brotliWriter := brotli.NewWriterLevel(&compressedBody, compressionLevel)
+
+		if _, err := brotliWriter.Write(body); err != nil {
+			log.Printf("Error writing to Brotli writer: %v", err)
 			http.Error(w, "Error compressing request body", http.StatusInternalServerError)
 			return
 		}
 
-		if _, err := zlibWriter.Write(body); err != nil {
-			log.Printf("Error writing to zlib writer: %v", err)
-			http.Error(w, "Error compressing request body", http.StatusInternalServerError)
-			return
-		}
-
-		if err := zlibWriter.Close(); err != nil {
-			log.Printf("Error closing zlib writer: %v", err)
+		if err := brotliWriter.Close(); err != nil {
+			log.Printf("Error closing Brotli writer: %v", err)
 			http.Error(w, "Error compressing request body", http.StatusInternalServerError)
 			return
 		}
@@ -136,13 +130,13 @@ func main() {
 		// Compression stats
 		compressedSize := compressedBody.Len()
 		compressionTime := time.Since(startTime).Milliseconds()
-		compressionRatio := float64(compressedSize) / float64(originalSize)
+		compressionRatio := float64(originalSize) / float64(compressedSize)
 
-		log.Printf("Compression: o: %d bytes, c: %d bytes, r: %.2f, t: %d ms",
+		log.Printf("Compression: o: %d, c: %d, r: %.2f, t: %d ms",
 			originalSize, compressedSize, compressionRatio, compressionTime)
 
-		// Set Content-Encoding header to deflate
-		proxyReq.Header.Set("Content-Encoding", "deflate")
+		// Set Content-Encoding header to Brotli
+		proxyReq.Header.Set("Content-Encoding", "br")
 
 		proxyReq.Body = ioutil.NopCloser(bytes.NewReader(compressedBody.Bytes()))
 

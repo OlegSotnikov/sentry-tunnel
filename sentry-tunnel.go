@@ -233,9 +233,11 @@ func copyHeaders(src http.Header, dst http.Header) {
 	}
 }
 
-// Decompress the request body using DataDog Zstandard with timing
+// Decompress the request body using DataDog Zstandard with timing and proper resource handling
 func decompressRequestBody(r *http.Request) ([]byte, error) {
-	start := time.Now() // Start timer
+	start := time.Now()  // Start timer
+	defer r.Body.Close() // Ensure the request body is always closed
+
 	contentEncoding := r.Header.Get("Content-Encoding")
 	var body []byte
 	var err error
@@ -243,24 +245,26 @@ func decompressRequestBody(r *http.Request) ([]byte, error) {
 	if contentEncoding == "zstd" {
 		compressedBody, err := io.ReadAll(r.Body)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error reading compressed body: %w", err)
 		}
 
-		// Decompress the body
+		// Decompress the body using zstd
 		body, err = zstd.Decompress(nil, compressedBody)
+		if err != nil {
+			return nil, fmt.Errorf("error during zstd decompression: %w", err)
+		}
 	} else {
 		// If no compression, just read the body as is
 		body, err = io.ReadAll(r.Body)
+		if err != nil {
+			return nil, fmt.Errorf("error reading body: %w", err)
+		}
 	}
 
 	duration := time.Since(start) // Calculate time taken
-	if err != nil {
-		log.Printf("Error during decompression: %v, Time taken: %s", err, duration)
-	} else {
-		log.Printf("Decompressed body size: %d bytes, Time taken: %s", len(body), duration)
-	}
+	log.Printf("Decompressed body size: %d bytes, Time taken: %s", len(body), duration)
 
-	return body, err
+	return body, nil
 }
 
 // Compress the request body using DataDog Zstandard with timing

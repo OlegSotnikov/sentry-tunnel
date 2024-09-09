@@ -4,9 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/andybalholm/brotli" // Import Brotli compression package
+	"github.com/andybalholm/brotli"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -53,7 +52,7 @@ func main() {
 			return
 		}
 
-		body, err := ioutil.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
 		defer r.Body.Close()
 		if err != nil {
 			log.Printf("Error reading request body: %v", err)
@@ -132,13 +131,13 @@ func main() {
 		compressionTime := time.Since(startTime).Milliseconds()
 		compressionRatio := float64(originalSize) / float64(compressedSize)
 
-		log.Printf("Compression: o: %d, c: %d, r: %.2f, t: %d ms",
+		log.Printf("Request: %d -> %d, %.2f, %d ms",
 			originalSize, compressedSize, compressionRatio, compressionTime)
 
 		// Set Content-Encoding header to Brotli
 		proxyReq.Header.Set("Content-Encoding", "br")
 
-		proxyReq.Body = ioutil.NopCloser(bytes.NewReader(compressedBody.Bytes()))
+		proxyReq.Body = io.NopCloser(bytes.NewReader(compressedBody.Bytes()))
 
 		client := &http.Client{}
 		resp, err := client.Do(proxyReq)
@@ -149,7 +148,7 @@ func main() {
 		}
 		defer resp.Body.Close()
 
-		responseBytes, err := ioutil.ReadAll(resp.Body)
+		responseBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.Printf("Error reading response from Sentry: %v", err)
 			http.Error(w, "Failed to read response from Sentry", http.StatusInternalServerError)
@@ -157,7 +156,7 @@ func main() {
 		}
 
 		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, ioutil.NopCloser(bytes.NewReader(responseBytes)))
+		io.Copy(w, io.NopCloser(bytes.NewReader(responseBytes)))
 	})
 
 	log.Printf("Server starting on port %s at path %s\n", port, handlerPath)

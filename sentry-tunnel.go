@@ -46,6 +46,82 @@ func main() {
 		}
 	}
 
+	http.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		defer r.Body.Close()
+		if err != nil {
+			log.Printf("Error reading request body: %v", err)
+			http.Error(w, "Error reading request body", http.StatusInternalServerError)
+			return
+		}
+
+		upstreamURL := fmt.Sprintf("https://%s%s", sentryHost, r.URL.Path)
+		proxyReq, err := http.NewRequest(http.MethodPost, upstreamURL, nil)
+		if err != nil {
+			log.Printf("Error creating proxy request: %v", err)
+			http.Error(w, "Error creating proxy request", http.StatusInternalServerError)
+			return
+		}
+		copyHeaders(r.Header, proxyReq.Header)
+
+		// Start compression and measure time
+		startTime := time.Now()
+		originalSize := len(body)
+
+		// Compress the body using Brotli with the configured compression level
+		var compressedBody bytes.Buffer
+		brotliWriter := brotli.NewWriterLevel(&compressedBody, compressionLevel)
+
+		if _, err := brotliWriter.Write(body); err != nil {
+			log.Printf("Error writing to Brotli writer: %v", err)
+			http.Error(w, "Error compressing request body", http.StatusInternalServerError)
+			return
+		}
+
+		if err := brotliWriter.Close(); err != nil {
+			log.Printf("Error closing Brotli writer: %v", err)
+			http.Error(w, "Error compressing request body", http.StatusInternalServerError)
+			return
+		}
+
+		// Compression stats
+		compressedSize := compressedBody.Len()
+		compressionTime := time.Since(startTime).Milliseconds()
+		compressionRatio := float64(originalSize) / float64(compressedSize)
+
+		log.Printf("Envelope: %d -> %d, %.2f, %d ms",
+			originalSize, compressedSize, compressionRatio, compressionTime)
+
+		// Set Content-Encoding header to Brotli
+		proxyReq.Header.Set("Content-Encoding", "br")
+
+		proxyReq.Body = io.NopCloser(bytes.NewReader(compressedBody.Bytes()))
+
+		client := &http.Client{}
+		resp, err := client.Do(proxyReq)
+		if err != nil {
+			log.Printf("Error tunneling to Sentry: %v", err)
+			http.Error(w, "Error tunneling to Sentry", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		responseBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("Error reading response from Sentry: %v", err)
+			http.Error(w, "Failed to read response from Sentry", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, io.NopCloser(bytes.NewReader(responseBytes)))
+	})
+
 	http.HandleFunc(handlerPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -131,7 +207,7 @@ func main() {
 		compressionTime := time.Since(startTime).Milliseconds()
 		compressionRatio := float64(originalSize) / float64(compressedSize)
 
-		log.Printf("Request: %d -> %d, %.2f, %d ms",
+		log.Printf("Tunnel: %d -> %d, %.2f, %d ms",
 			originalSize, compressedSize, compressionRatio, compressionTime)
 
 		// Set Content-Encoding header to Brotli

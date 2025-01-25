@@ -281,6 +281,7 @@ func contains(slice []string, item string) bool {
 }
 
 func copyHeaders(src http.Header, dst http.Header) {
+	dst.Set("host", "s.appmaster.io")
 	if xff := src.Get("X-Forwarded-For"); xff != "" {
 		dst.Set("X-Forwarded-For", xff)
 	}

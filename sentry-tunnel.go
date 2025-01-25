@@ -172,11 +172,6 @@ func main() {
 		}
 
 		dsn, err := url.Parse(dsnString)
-		if err != nil || dsn.Hostname() != sentryHost {
-			log.Printf("Invalid Sentry hostname: %s", dsn.Hostname())
-			http.Error(w, "Invalid Sentry hostname", http.StatusForbidden)
-			return
-		}
 
 		projectID := strings.TrimPrefix(dsn.Path, "/")
 		if len(allowedProjectIDs) > 0 && !contains(allowedProjectIDs, projectID) {

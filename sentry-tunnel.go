@@ -40,6 +40,11 @@ func main() {
 		handlerPath = "/s" // Default path
 	}
 
+	sentryHostProto := os.Getenv("SENTRY_HOST_PROTO")
+	if sentryHostProto == "" {
+		sentryHostProto = "https" // Default
+	}
+
 	compressionLevel := brotli.DefaultCompression
 	if levelStr := os.Getenv("COMPRESSION_LEVEL"); levelStr != "" {
 		if level, err := strconv.Atoi(levelStr); err == nil {
@@ -65,7 +70,7 @@ func main() {
 			return
 		}
 
-		upstreamURL := fmt.Sprintf("https://%s%s", sentryHost, r.URL.Path)
+		upstreamURL := fmt.Sprintf("%s://%s%s", sentryHostProto, sentryHost, r.URL.Path)
 		proxyReq, err := http.NewRequest(http.MethodPost, upstreamURL, nil)
 		if err != nil {
 			log.Printf("Error creating proxy request: %v", err)
@@ -180,7 +185,7 @@ func main() {
 			return
 		}
 
-		upstreamURL := fmt.Sprintf("https://%s/api/%s/envelope/", sentryHost, projectID)
+		upstreamURL := fmt.Sprintf("%s://%s/api/%s/envelope/", sentryHostProto, sentryHost, projectID)
 		proxyReq, err := http.NewRequest(http.MethodPost, upstreamURL, nil)
 		if err != nil {
 			log.Printf("Error creating proxy request: %v", err)

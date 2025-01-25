@@ -18,6 +18,29 @@ import (
 	"time"
 )
 
+var (
+	// You can tune these transport settings:
+	defaultTransport = &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 100,
+
+		// Timeouts to avoid hanging connections
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+
+		// Keep these false if you want to allow keep-alives
+		DisableKeepAlives:  false,
+		DisableCompression: false, // only for response compression, not request
+		IdleConnTimeout:    90 * time.Second,
+	}
+
+	// Reuse a single client
+	httpClient = &http.Client{
+		Transport: defaultTransport,
+		Timeout:   10 * time.Second,
+	}
+)
+
 func main() {
 	sentryHost := os.Getenv("SENTRY_HOST")
 	if sentryHost == "" {
@@ -112,10 +135,7 @@ func main() {
 
 		proxyReq.Body = io.NopCloser(bytes.NewReader(compressedBody.Bytes()))
 
-		client := &http.Client{
-			Timeout: 10 * time.Second,
-		}
-		resp, err := client.Do(proxyReq)
+		resp, err := httpClient.Do(proxyReq)
 		if err != nil {
 			log.Printf("Error tunneling to Sentry: %v", err)
 			http.Error(w, "Error tunneling to Sentry", http.StatusBadGateway)
@@ -222,10 +242,7 @@ func main() {
 
 		proxyReq.Body = io.NopCloser(bytes.NewReader(compressedBody.Bytes()))
 
-		client := &http.Client{
-			Timeout: 10 * time.Second,
-		}
-		resp, err := client.Do(proxyReq)
+		resp, err := httpClient.Do(proxyReq)
 		if err != nil {
 			log.Printf("Error tunneling to Sentry: %v", err)
 			http.Error(w, "Error tunneling to Sentry", http.StatusBadGateway)

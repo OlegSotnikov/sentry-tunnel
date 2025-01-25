@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/andybalholm/brotli"
@@ -10,8 +11,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -46,7 +49,9 @@ func main() {
 		}
 	}
 
-	http.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -102,7 +107,9 @@ func main() {
 
 		proxyReq.Body = io.NopCloser(bytes.NewReader(compressedBody.Bytes()))
 
-		client := &http.Client{}
+		client := &http.Client{
+			Timeout: 10 * time.Second,
+		}
 		resp, err := client.Do(proxyReq)
 		if err != nil {
 			log.Printf("Error tunneling to Sentry: %v", err)
@@ -122,7 +129,7 @@ func main() {
 		io.Copy(w, io.NopCloser(bytes.NewReader(responseBytes)))
 	})
 
-	http.HandleFunc(handlerPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(handlerPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -235,8 +242,33 @@ func main() {
 		io.Copy(w, io.NopCloser(bytes.NewReader(responseBytes)))
 	})
 
-	log.Printf("Server starting on port %s at path %s\n", port, handlerPath)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	// Setup server for graceful shutdown
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: mux,
+	}
+
+	// Start server in a goroutine
+	go func() {
+		log.Printf("Server starting on port %s at path %s\n", port, handlerPath)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
+
+	// Listen for interrupt (CTRL+C) or SIGTERM (docker stop)
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+
+	// Graceful shutdown with timeout
+	log.Println("Shutting down server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("Server forced to shutdown: %v", err)
+	}
+	log.Println("Server stopped")
 }
 
 func contains(slice []string, item string) bool {

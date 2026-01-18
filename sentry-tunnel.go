@@ -5,17 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/andybalholm/brotli"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/andybalholm/brotli"
 )
 
 var (
@@ -41,41 +43,129 @@ var (
 	}
 )
 
-func main() {
-	sentryHost := os.Getenv("SENTRY_HOST")
-	if sentryHost == "" {
+// config holds all configuration values loaded from environment variables
+type config struct {
+	sentryHost       string
+	sentryHostProto  string
+	sentryHostHeader string
+	port             string
+	handlerPath      string
+	compressionLevel int
+	allowedProjectIDs []string
+}
+
+func loadConfig() config {
+	cfg := config{}
+
+	cfg.sentryHost = os.Getenv("SENTRY_HOST")
+	if cfg.sentryHost == "" {
 		log.Fatal("SENTRY_HOST environment variable is not set")
 	}
 
-	port := os.Getenv("PROXY_PORT")
-	if port == "" {
-		port = "7878" // Default port if not specified
+	cfg.port = os.Getenv("PROXY_PORT")
+	if cfg.port == "" {
+		cfg.port = "7878" // Default port if not specified
 	}
 
 	// Read PROJECT_IDS from environment, split into a slice, and handle empty case
-	allowedProjectIDs := strings.Split(os.Getenv("PROJECT_IDS"), ",")
-	if len(allowedProjectIDs) == 1 && allowedProjectIDs[0] == "" {
-		allowedProjectIDs = []string{} // Handle case where PROJECT_IDS is not set or empty
+	cfg.allowedProjectIDs = strings.Split(os.Getenv("PROJECT_IDS"), ",")
+	if len(cfg.allowedProjectIDs) == 1 && cfg.allowedProjectIDs[0] == "" {
+		cfg.allowedProjectIDs = []string{} // Handle case where PROJECT_IDS is not set or empty
 	}
 
-	handlerPath := os.Getenv("PROXY_PATH")
-	if handlerPath == "" {
-		handlerPath = "/s" // Default path
+	cfg.handlerPath = os.Getenv("PROXY_PATH")
+	if cfg.handlerPath == "" {
+		cfg.handlerPath = "/s" // Default path
 	}
 
-	sentryHostProto := os.Getenv("SENTRY_HOST_PROTO")
-	if sentryHostProto == "" {
-		sentryHostProto = "https" // Default
+	cfg.sentryHostProto = os.Getenv("SENTRY_HOST_PROTO")
+	if cfg.sentryHostProto == "" {
+		cfg.sentryHostProto = "https" // Default
 	}
 
-	compressionLevel := brotli.DefaultCompression
+	cfg.sentryHostHeader = os.Getenv("SENTRY_HOST_HEADER")
+	if cfg.sentryHostHeader == "" {
+		cfg.sentryHostHeader = cfg.sentryHost // Default to SENTRY_HOST
+	}
+
+	cfg.compressionLevel = brotli.DefaultCompression
 	if levelStr := os.Getenv("COMPRESSION_LEVEL"); levelStr != "" {
 		if level, err := strconv.Atoi(levelStr); err == nil {
-			compressionLevel = level
+			cfg.compressionLevel = level
 		} else {
 			log.Printf("Invalid COMPRESSION_LEVEL, using default: %v", err)
 		}
 	}
+
+	return cfg
+}
+
+// compressBody compresses the given body using Brotli and returns the compressed bytes
+func compressBody(body []byte, compressionLevel int) ([]byte, error) {
+	var compressedBody bytes.Buffer
+	brotliWriter := brotli.NewWriterLevel(&compressedBody, compressionLevel)
+
+	if _, err := brotliWriter.Write(body); err != nil {
+		return nil, fmt.Errorf("error writing to Brotli writer: %w", err)
+	}
+
+	if err := brotliWriter.Close(); err != nil {
+		return nil, fmt.Errorf("error closing Brotli writer: %w", err)
+	}
+
+	return compressedBody.Bytes(), nil
+}
+
+// proxyToSentry compresses the body, sends the request to upstream, and writes the response
+func proxyToSentry(w http.ResponseWriter, r *http.Request, body []byte, upstreamURL string, compressionLevel int, hostHeader string, logPrefix string) {
+	proxyReq, err := http.NewRequest(http.MethodPost, upstreamURL, nil)
+	if err != nil {
+		log.Printf("Error creating proxy request: %v", err)
+		http.Error(w, "Error creating proxy request", http.StatusInternalServerError)
+		return
+	}
+	copyHeaders(r.Header, proxyReq.Header, hostHeader)
+
+	// Start compression and measure time
+	startTime := time.Now()
+	originalSize := len(body)
+
+	compressedBody, err := compressBody(body, compressionLevel)
+	if err != nil {
+		log.Printf("%v", err)
+		http.Error(w, "Error compressing request body", http.StatusInternalServerError)
+		return
+	}
+
+	// Compression stats
+	compressedSize := len(compressedBody)
+	compressionTime := time.Since(startTime).Milliseconds()
+	var compressionRatio float64
+	if compressedSize > 0 {
+		compressionRatio = float64(originalSize) / float64(compressedSize)
+	}
+
+	log.Printf("%s: %d -> %d, %.2f, %d ms",
+		logPrefix, originalSize, compressedSize, compressionRatio, compressionTime)
+
+	// Set Content-Encoding header to Brotli
+	proxyReq.Header.Set("Content-Encoding", "br")
+	proxyReq.Body = io.NopCloser(bytes.NewReader(compressedBody))
+
+	resp, err := httpClient.Do(proxyReq)
+	if err != nil {
+		log.Printf("Error tunneling to Sentry: %v", err)
+		http.Error(w, "Error tunneling to Sentry", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+func main() {
+	cfg := loadConfig()
 
 	mux := http.NewServeMux()
 
@@ -93,68 +183,11 @@ func main() {
 			return
 		}
 
-		upstreamURL := fmt.Sprintf("%s://%s%s", sentryHostProto, sentryHost, r.URL.Path)
-		proxyReq, err := http.NewRequest(http.MethodPost, upstreamURL, nil)
-		if err != nil {
-			log.Printf("Error creating proxy request: %v", err)
-			http.Error(w, "Error creating proxy request", http.StatusInternalServerError)
-			return
-		}
-		copyHeaders(r.Header, proxyReq.Header)
-
-		// Start compression and measure time
-		startTime := time.Now()
-		originalSize := len(body)
-
-		// Compress the body using Brotli with the configured compression level
-		var compressedBody bytes.Buffer
-		brotliWriter := brotli.NewWriterLevel(&compressedBody, compressionLevel)
-
-		if _, err := brotliWriter.Write(body); err != nil {
-			log.Printf("Error writing to Brotli writer: %v", err)
-			http.Error(w, "Error compressing request body", http.StatusInternalServerError)
-			return
-		}
-
-		if err := brotliWriter.Close(); err != nil {
-			log.Printf("Error closing Brotli writer: %v", err)
-			http.Error(w, "Error compressing request body", http.StatusInternalServerError)
-			return
-		}
-
-		// Compression stats
-		compressedSize := compressedBody.Len()
-		compressionTime := time.Since(startTime).Milliseconds()
-		compressionRatio := float64(originalSize) / float64(compressedSize)
-
-		log.Printf("Envelope: %d -> %d, %.2f, %d ms",
-			originalSize, compressedSize, compressionRatio, compressionTime)
-
-		// Set Content-Encoding header to Brotli
-		proxyReq.Header.Set("Content-Encoding", "br")
-
-		proxyReq.Body = io.NopCloser(bytes.NewReader(compressedBody.Bytes()))
-
-		resp, err := httpClient.Do(proxyReq)
-		if err != nil {
-			log.Printf("Error tunneling to Sentry: %v", err)
-			http.Error(w, "Error tunneling to Sentry", http.StatusBadGateway)
-			return
-		}
-		defer resp.Body.Close()
-
-		responseBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("Error reading response from Sentry: %v", err)
-			http.Error(w, "Failed to read response from Sentry", http.StatusInternalServerError)
-			return
-		}
-
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, io.NopCloser(bytes.NewReader(responseBytes)))
+		upstreamURL := fmt.Sprintf("%s://%s%s", cfg.sentryHostProto, cfg.sentryHost, r.URL.Path)
+		proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Envelope")
 	})
 
-	mux.HandleFunc(handlerPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(cfg.handlerPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -192,84 +225,32 @@ func main() {
 		}
 
 		dsn, err := url.Parse(dsnString)
+		if err != nil {
+			log.Printf("Error parsing DSN URL: %v", err)
+			http.Error(w, "Invalid DSN URL format", http.StatusBadRequest)
+			return
+		}
 
 		projectID := strings.TrimPrefix(dsn.Path, "/")
-		if len(allowedProjectIDs) > 0 && !contains(allowedProjectIDs, projectID) {
+		if len(cfg.allowedProjectIDs) > 0 && !slices.Contains(cfg.allowedProjectIDs, projectID) {
 			log.Printf("Invalid or unauthorized Sentry project ID: %s", projectID)
 			http.Error(w, "Invalid or unauthorized Sentry project ID", http.StatusForbidden)
 			return
 		}
 
-		upstreamURL := fmt.Sprintf("%s://%s/api/%s/envelope/", sentryHostProto, sentryHost, projectID)
-		proxyReq, err := http.NewRequest(http.MethodPost, upstreamURL, nil)
-		if err != nil {
-			log.Printf("Error creating proxy request: %v", err)
-			http.Error(w, "Error creating proxy request", http.StatusInternalServerError)
-			return
-		}
-		copyHeaders(r.Header, proxyReq.Header)
-
-		// Start compression and measure time
-		startTime := time.Now()
-		originalSize := len(body)
-
-		// Compress the body using Brotli with the configured compression level
-		var compressedBody bytes.Buffer
-		brotliWriter := brotli.NewWriterLevel(&compressedBody, compressionLevel)
-
-		if _, err := brotliWriter.Write(body); err != nil {
-			log.Printf("Error writing to Brotli writer: %v", err)
-			http.Error(w, "Error compressing request body", http.StatusInternalServerError)
-			return
-		}
-
-		if err := brotliWriter.Close(); err != nil {
-			log.Printf("Error closing Brotli writer: %v", err)
-			http.Error(w, "Error compressing request body", http.StatusInternalServerError)
-			return
-		}
-
-		// Compression stats
-		compressedSize := compressedBody.Len()
-		compressionTime := time.Since(startTime).Milliseconds()
-		compressionRatio := float64(originalSize) / float64(compressedSize)
-
-		log.Printf("Tunnel: %d -> %d, %.2f, %d ms",
-			originalSize, compressedSize, compressionRatio, compressionTime)
-
-		// Set Content-Encoding header to Brotli
-		proxyReq.Header.Set("Content-Encoding", "br")
-
-		proxyReq.Body = io.NopCloser(bytes.NewReader(compressedBody.Bytes()))
-
-		resp, err := httpClient.Do(proxyReq)
-		if err != nil {
-			log.Printf("Error tunneling to Sentry: %v", err)
-			http.Error(w, "Error tunneling to Sentry", http.StatusBadGateway)
-			return
-		}
-		defer resp.Body.Close()
-
-		responseBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("Error reading response from Sentry: %v", err)
-			http.Error(w, "Failed to read response from Sentry", http.StatusInternalServerError)
-			return
-		}
-
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, io.NopCloser(bytes.NewReader(responseBytes)))
+		upstreamURL := fmt.Sprintf("%s://%s/api/%s/envelope/", cfg.sentryHostProto, cfg.sentryHost, projectID)
+		proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Tunnel")
 	})
 
 	// Setup server for graceful shutdown
 	srv := &http.Server{
-		Addr:    ":" + port,
+		Addr:    ":" + cfg.port,
 		Handler: mux,
 	}
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("Server starting on port %s at path %s\n", port, handlerPath)
+		log.Printf("Server starting on port %s at path %s\n", cfg.port, cfg.handlerPath)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
@@ -290,17 +271,11 @@ func main() {
 	log.Println("Server stopped")
 }
 
-func contains(slice []string, item string) bool {
-	for _, v := range slice {
-		if v == item {
-			return true
-		}
+func copyHeaders(src http.Header, dst http.Header, hostHeader string) {
+	dst.Set("Host", hostHeader)
+	if ct := src.Get("Content-Type"); ct != "" {
+		dst.Set("Content-Type", ct)
 	}
-	return false
-}
-
-func copyHeaders(src http.Header, dst http.Header) {
-	dst.Set("host", "s.appmaster.io")
 	if xff := src.Get("X-Forwarded-For"); xff != "" {
 		dst.Set("X-Forwarded-For", xff)
 	}

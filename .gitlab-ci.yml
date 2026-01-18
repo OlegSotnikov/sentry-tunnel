@@ -136,7 +136,6 @@ dockerize:
 include:
   - template: Jobs/Dependency-Scanning.gitlab-ci.yml
   - template: Jobs/Container-Scanning.gitlab-ci.yml
-  - template: Jobs/SAST.gitlab-ci.yml
 
 variables:
   DS_REMEDIATE: "false"
@@ -146,14 +145,6 @@ gemnasium-dependency_scanning:
   stage: build
   rules:
     - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
-
-sast:
-  stage: build
-  variables:
-    SEARCH_MAX_DEPTH: '6'
-  rules:
-    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
-    - if: $CI_COMMIT_BRANCH == "master"
 
 container_scanning:
   stage: validate

@@ -8,7 +8,6 @@ stages:
   - validate
   - cleanup
 
-# Shared cache configuration
 .go-cache: &go-cache
   cache:
     paths:
@@ -17,7 +16,7 @@ stages:
     - mkdir -p .cache
     - export GOPATH="$CI_PROJECT_DIR/.cache"
 
-############  TEST & BUILD (parallel on master/staging)  #########################
+############  TEST & BUILD (parallel on master)  #########################
 
 unit-test:
   <<: *go-cache
@@ -40,8 +39,8 @@ unit-test:
       - coverage.out
     expire_in: 1 week
   rules:
-    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "staging"
-    - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "staging"
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
+    - if: $CI_COMMIT_BRANCH == "master"
 
 golangci-lint:
   stage: build
@@ -61,7 +60,7 @@ golangci-lint:
     paths:
       - gl-code-quality-report.json
   rules:
-    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "staging"
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
   timeout: 10 minutes
   retry:
     max: 2
@@ -87,47 +86,25 @@ build-mr-linux-amd64:
   <<: *build-template
   needs: []
   rules:
-    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "staging"
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
   variables:
     GOOS: linux
     GOARCH: amd64
   artifacts:
     expire_in: 1 day
 
-build-stag-linux-amd64:
+build-linux-amd64:
   <<: *build-template
   needs: []
-  environment: staging
-  rules:
-    - if: $CI_COMMIT_BRANCH == "staging"
-  variables:
-    GOOS: linux
-    GOARCH: amd64
-
-build-stag-linux-arm64:
-  <<: *build-template
-  needs: []
-  environment: staging
-  rules:
-    - if: $CI_COMMIT_BRANCH == "staging"
-  variables:
-    GOOS: linux
-    GOARCH: arm64
-
-build-prod-linux-amd64:
-  <<: *build-template
-  needs: []
-  environment: production
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
   variables:
     GOOS: linux
     GOARCH: amd64
 
-build-prod-linux-arm64:
+build-linux-arm64:
   <<: *build-template
   needs: []
-  environment: production
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
   variables:
@@ -157,47 +134,27 @@ build-prod-linux-arm64:
 
     EOT
 
-.docker-job: &docker-job
+dockerize:
   stage: dockerize
   tags:
     - dockerbuilder
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+  variables:
+    GIT_STRATEGY: none
+  needs:
+    - job: unit-test
+    - job: build-linux-amd64
+      artifacts: true
+    - job: build-linux-arm64
+      artifacts: true
   script:
     - *create-dockerfile
     - cp -r /usr/share/zoneinfo ${CI_PROJECT_DIR}/zoneinfo
     - cp /etc/ssl/certs/ca-certificates.crt ${CI_PROJECT_DIR}/ca-certificates.crt
     - docker login -u ${DOCKER_HUB_LOGIN} -p ${DOCKER_HUB_TOKEN}
-    - docker buildx build --platform linux/amd64,linux/arm64 --sbom=true --provenance=true -t ${PR_DOCKER_HUB_REPOSITORY}:${CI_COMMIT_BRANCH}-${CI_COMMIT_SHORT_SHA} -t ${PR_DOCKER_HUB_REPOSITORY}:${CI_COMMIT_BRANCH}-latest --push . --progress=plain
+    - docker buildx build --platform linux/amd64,linux/arm64 --sbom=true --provenance=true -t ${PR_DOCKER_HUB_REPOSITORY}:${CI_COMMIT_SHORT_SHA} -t ${PR_DOCKER_HUB_REPOSITORY}:latest --push . --progress=plain
     - docker logout
-
-dockerize-staging:
-  <<: *docker-job
-  rules:
-    - if: $CI_COMMIT_BRANCH == "staging"
-  environment: staging
-  resource_group: staging
-  variables:
-    GIT_STRATEGY: none
-  needs:
-    - job: unit-test
-    - job: build-stag-linux-amd64
-      artifacts: true
-    - job: build-stag-linux-arm64
-      artifacts: true
-
-dockerize-production:
-  <<: *docker-job
-  rules:
-    - if: $CI_COMMIT_BRANCH == "master"
-  environment: production
-  resource_group: production
-  variables:
-    GIT_STRATEGY: none
-  needs:
-    - job: unit-test
-    - job: build-prod-linux-amd64
-      artifacts: true
-    - job: build-prod-linux-arm64
-      artifacts: true
 
 ##################### SECURITY SCANNING ######################
 
@@ -207,23 +164,23 @@ include:
   - template: Jobs/SAST.gitlab-ci.yml
   - template: Jobs/Code-Quality.gitlab-ci.yml
 
-gemnasium-dependency_scanning:
-  stage: build
-  rules:
-    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "staging"
-
 variables:
   DS_REMEDIATE: "false"
   DS_MAX_DEPTH: -1
 
+gemnasium-dependency_scanning:
+  stage: build
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
+
 code_quality:
   stage: build
   rules:
-    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "staging"
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
 
 semgrep-sast:
   rules:
-    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "staging"
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
 
 sast:
   stage: build
@@ -233,9 +190,9 @@ sast:
 container_scanning:
   stage: validate
   rules:
-    - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "staging"
+    - if: $CI_COMMIT_BRANCH == "master"
   variables:
-    CS_IMAGE: docker.io/${PR_DOCKER_HUB_REPOSITORY}:${CI_COMMIT_BRANCH}-latest
+    CS_IMAGE: docker.io/${PR_DOCKER_HUB_REPOSITORY}:latest
     CS_REGISTRY_USER: ${DOCKER_HUB_LOGIN}
     CS_REGISTRY_PASSWORD: ${DOCKER_HUB_TOKEN}
 
@@ -251,7 +208,7 @@ clean:
   before_script: []
   cache: []
   rules:
-    - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "staging"
+    - if: $CI_COMMIT_BRANCH == "master"
   script:
     - echo "Time to clean up"
   after_script:

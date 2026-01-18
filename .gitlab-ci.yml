@@ -2,6 +2,7 @@ default:
   image: ${CI_DEPENDENCY_PROXY_DIRECT_GROUP_IMAGE_PREFIX}/golang:1.25
 
 stages:
+  - test
   - build
   - dockerize
   - validate

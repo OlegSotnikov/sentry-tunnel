@@ -1,5 +1,5 @@
 module sentry-tunnel
 
-go 1.21
+go 1.25
 
-require github.com/andybalholm/brotli v1.1.0
+require github.com/andybalholm/brotli v1.2.0

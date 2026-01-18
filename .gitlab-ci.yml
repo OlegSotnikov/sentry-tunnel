@@ -42,31 +42,6 @@ unit-test:
     - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
     - if: $CI_COMMIT_BRANCH == "master"
 
-golangci-lint:
-  stage: build
-  image: ${CI_DEPENDENCY_PROXY_DIRECT_GROUP_IMAGE_PREFIX}/golangci/golangci-lint:latest-alpine
-  cache: []
-  needs: []
-  before_script:
-    - apk add --no-cache git bash jq
-  script:
-    golangci-lint run --timeout=5m --out-format code-climate --no-config --issues-exit-code=0 --max-same-issues=0 --allow-parallel-runners --disable-all -E revive,govet,staticcheck,errcheck,gosimple,exportloopref,gocritic,goconst |
-    tee "gl-code-quality-report.json" |
-    jq -r '.[] | "\(.location.path):\(.location.lines.begin) \(.description)"'
-  artifacts:
-    when: always
-    reports:
-      codequality: gl-code-quality-report.json
-    paths:
-      - gl-code-quality-report.json
-  rules:
-    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
-  timeout: 10 minutes
-  retry:
-    max: 2
-    when:
-      - runner_system_failure
-
 ########### BUILD ###############
 
 .build-template: &build-template
@@ -162,7 +137,6 @@ include:
   - template: Jobs/Dependency-Scanning.gitlab-ci.yml
   - template: Jobs/Container-Scanning.gitlab-ci.yml
   - template: Jobs/SAST.gitlab-ci.yml
-  - template: Jobs/Code-Quality.gitlab-ci.yml
 
 variables:
   DS_REMEDIATE: "false"
@@ -173,19 +147,13 @@ gemnasium-dependency_scanning:
   rules:
     - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
 
-code_quality:
-  stage: build
-  rules:
-    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
-
-semgrep-sast:
-  rules:
-    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
-
 sast:
   stage: build
   variables:
     SEARCH_MAX_DEPTH: '6'
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
+    - if: $CI_COMMIT_BRANCH == "master"
 
 container_scanning:
   stage: validate

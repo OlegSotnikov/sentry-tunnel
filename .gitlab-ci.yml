@@ -171,7 +171,6 @@ clean:
   script:
     - echo "Time to clean up"
   after_script:
-    - docker image prune -a -f
     - docker builder prune -a -f
     - cd ..
     - echo "Cleaning ${CI_PROJECT_DIR}"

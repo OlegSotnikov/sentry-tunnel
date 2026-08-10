@@ -1,0 +1,5 @@
+/sentry-tunnel
+/bin_*/
+/binaries/
+coverage.out
+report.xml

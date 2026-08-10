@@ -16,10 +16,10 @@ import (
 // TestLoadConfig tests the configuration loading from environment variables
 func TestLoadConfig(t *testing.T) {
 	tests := []struct {
-		name        string
-		envVars     map[string]string
-		wantFatal   bool
-		validate    func(t *testing.T, cfg config)
+		name      string
+		envVars   map[string]string
+		wantFatal bool
+		validate  func(t *testing.T, cfg config)
 	}{
 		{
 			name:      "missing SENTRY_HOST should fatal",

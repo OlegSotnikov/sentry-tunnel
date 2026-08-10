@@ -1,0 +1,25 @@
+# Keeps both dependency sets current without anyone remembering to look.
+# `govulncheck` in CI tells you when something is already wrong; this is what
+# stops it getting wrong.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-and-patch:
+        update-types: [minor, patch]
+
+  # The workflows pin third-party actions to commit SHAs, which is what keeps a
+  # compromised tag from publishing under our name — and also what makes them
+  # invisible to every other update mechanism.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

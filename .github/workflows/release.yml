@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (must already exist)'
+        required: true
+
+# Default for every job: read-only. Only the job that creates the GitHub
+# Release gets contents: write, and only the job that pushes an image can see
+# the Docker Hub credentials, because they live in a protected environment
+# rather than at repository level.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: build
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          dir="sentry-tunnel-${TAG}-${GOOS}-${GOARCH}"
+          mkdir -p "$dir"
+          # -trimpath so the published binary does not carry the runner's
+          # directory layout, and -X so `sentry-tunnel` logs the tag it was cut
+          # from instead of "dev".
+          go build -trimpath -ldflags "-s -w -X main.version=${TAG}" \
+            -o "$dir/sentry-tunnel" .
+          cp LICENSE README.md "$dir/"
+          tar czf "${dir}.tar.gz" "$dir"
+          sha256sum "${dir}.tar.gz"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: sentry-tunnel-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: dist-*
+          merge-multiple: true
+      - name: checksums
+        run: sha256sum sentry-tunnel-* > SHA256SUMS && cat SHA256SUMS
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            sentry-tunnel-*
+            SHA256SUMS
+
+  docker:
+    name: docker image
+    needs: [build]
+    runs-on: ubuntu-latest
+    # Environment: restricts this to `v*` tags and keeps the Docker Hub
+    # credentials scoped to this job rather than the whole repository.
+    environment: dockerhub
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: are Docker Hub credentials configured?
+        id: creds
+        env:
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "DOCKERHUB_TOKEN is not set, skipping the image." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.creds.outputs.have == 'true'
+        with:
+          pattern: dist-linux-*
+          merge-multiple: true
+      - name: lay the binaries out by platform
+        if: steps.creds.outputs.have == 'true'
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          # One directory per Docker architecture name, which is what the
+          # Dockerfile's ${TARGETARCH} selects.
+          for arch in amd64 arm64; do
+            dir="sentry-tunnel-${TAG}-linux-${arch}"
+            mkdir -p "binaries/linux/$arch"
+            tar xzf "${dir}.tar.gz"
+            mv "${dir}/sentry-tunnel" "binaries/linux/$arch/sentry-tunnel"
+            chmod +x "binaries/linux/$arch/sentry-tunnel"
+            file "binaries/linux/$arch/sentry-tunnel"
+          done
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        if: steps.creds.outputs.have == 'true'
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: steps.creds.outputs.have == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        if: steps.creds.outputs.have == 'true'
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          # One tag, both architectures, the daemon picks. Cheap here because
+          # the binaries are prebuilt and the image has no build steps to
+          # emulate.
+          platforms: linux/amd64,linux/arm64
+          sbom: true
+          provenance: true
+          tags: |
+            appmasterio/sentry-tunnel:${{ github.event.inputs.tag || github.ref_name }}
+            appmasterio/sentry-tunnel:latest
+      # The Docker Hub overview is the first thing anyone sees; keeping it in
+      # the repo means it ships with the image instead of drifting.
+      #
+      # `continue-on-error` because the stored credential is a push/pull PAT:
+      # editing repository metadata needs a wider scope and answers
+      # "access denied: insufficient scope". The image must still publish when
+      # only its description cannot.
+      - uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
+        if: steps.creds.outputs.have == 'true'
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: appmasterio/sentry-tunnel
+          short-description: "Brotli-compressing Sentry tunnel that gets your events past ad blockers, as one static binary in a scratch image"
+          readme-filepath: README.md

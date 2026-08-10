@@ -43,14 +43,20 @@ var (
 	}
 )
 
+// version is stamped at build time with -ldflags "-X main.version=...". The
+// pipeline this project used to live in already passed that flag, but there was
+// no symbol for the linker to write into, so a built binary could never say
+// which build it was.
+var version = "dev"
+
 // config holds all configuration values loaded from environment variables
 type config struct {
-	sentryHost       string
-	sentryHostProto  string
-	sentryHostHeader string
-	port             string
-	handlerPath      string
-	compressionLevel int
+	sentryHost        string
+	sentryHostProto   string
+	sentryHostHeader  string
+	port              string
+	handlerPath       string
+	compressionLevel  int
 	allowedProjectIDs []string
 }
 
@@ -250,7 +256,7 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("Server starting on port %s at path %s\n", cfg.port, cfg.handlerPath)
+		log.Printf("sentry-tunnel %s starting on port %s at path %s\n", version, cfg.port, cfg.handlerPath)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}

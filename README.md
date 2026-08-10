@@ -1,5 +1,9 @@
 # Sentry Tunnel
 
+[![CI](https://github.com/OlegSotnikov/sentry-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/OlegSotnikov/sentry-tunnel/actions/workflows/ci.yml)
+[![Docker Image](https://img.shields.io/docker/v/appmasterio/sentry-tunnel?label=docker&sort=semver)](https://hub.docker.com/r/appmasterio/sentry-tunnel)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A high-performance HTTP proxy for [Sentry](https://sentry.io) that compresses error events and telemetry data using Brotli compression before forwarding them to Sentry's servers.
 
 ## Why Use Sentry Tunnel?
@@ -39,54 +43,54 @@ All Sentry envelope item types are supported:
 
 ## Installation
 
-### From Source
-
-```bash
-git clone https://github.com/yourusername/sentry-tunnel.git
-cd sentry-tunnel
-
-# Build static binary
-CGO_ENABLED=0 go build -o sentry-tunnel .
-
-# Run
-export SENTRY_HOST=o123456.ingest.sentry.io
-./sentry-tunnel
-```
-
 ### Docker
 
-```dockerfile
-FROM golang:1.25-alpine AS builder
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o sentry-tunnel .
-
-FROM scratch
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /app/sentry-tunnel /sentry-tunnel
-EXPOSE 7878
-ENTRYPOINT ["/sentry-tunnel"]
-```
+The published image is `FROM scratch`: the static binary, a CA bundle and the
+timezone database, with no shell and no package manager. It runs as uid 65532
+and is built for `linux/amd64` and `linux/arm64` under one tag.
 
 ```bash
-docker build -t sentry-tunnel .
-docker run -d -p 7878:7878 -e SENTRY_HOST=o123456.ingest.sentry.io sentry-tunnel
+docker run -d -p 7878:7878 \
+  -e SENTRY_HOST=o123456.ingest.sentry.io \
+  appmasterio/sentry-tunnel:latest
+```
+
+Pin a release rather than `latest` for anything you care about:
+
+```bash
+docker pull appmasterio/sentry-tunnel:v1.0.0
 ```
 
 ### Docker Compose
 
 ```yaml
-version: '3.8'
 services:
   sentry-tunnel:
-    build: .
+    image: appmasterio/sentry-tunnel:v1.0.0
     ports:
       - "7878:7878"
     environment:
       - SENTRY_HOST=o123456.ingest.sentry.io
     restart: unless-stopped
+```
+
+### Prebuilt binaries
+
+Each [release](https://github.com/OlegSotnikov/sentry-tunnel/releases) carries
+static binaries for Linux and macOS on amd64 and arm64, plus `SHA256SUMS`.
+
+### From source
+
+```bash
+git clone https://github.com/OlegSotnikov/sentry-tunnel.git
+cd sentry-tunnel
+
+# Static binary — CGO_ENABLED=0 is what makes it run in a scratch container
+CGO_ENABLED=0 go build -ldflags "-s -w" -o sentry-tunnel .
+
+# Run
+export SENTRY_HOST=o123456.ingest.sentry.io
+./sentry-tunnel
 ```
 
 ## Configuration
@@ -212,6 +216,16 @@ go test -cover ./...    # With coverage
 go test -bench=. ./...  # With benchmarks
 ```
 
+## Releasing
+
+Pushing a `v*` tag builds the binaries, publishes a GitHub Release with
+checksums, and pushes `appmasterio/sentry-tunnel:<tag>` and `:latest` for both
+architectures with an SBOM and provenance attached.
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
 ## License
 
-MIT License
+[MIT](LICENSE)

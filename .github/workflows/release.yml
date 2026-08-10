@@ -156,5 +156,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: appmasterio/sentry-tunnel
-          short-description: "Brotli-compressing Sentry tunnel that gets your events past ad blockers, as one static binary in a scratch image"
+          # Docker Hub truncates this at 100 bytes, so it is written to fit.
+          short-description: "Brotli-compressing Sentry tunnel that gets events past ad blockers. Static binary, scratch"
           readme-filepath: README.md

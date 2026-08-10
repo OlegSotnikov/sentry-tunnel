@@ -11,8 +11,24 @@ A high-performance HTTP proxy for [Sentry](https://sentry.io) that compresses er
 ### Ad Blockers & Privacy Extensions
 Many ad blockers and privacy-focused browser extensions block requests to Sentry's domains (`*.ingest.sentry.io`). By routing Sentry traffic through your own domain, you can ensure error tracking works for all users.
 
-### Bandwidth Optimization
-Compresses all payloads using Brotli compression, reducing bandwidth usage—especially beneficial for high-traffic applications.
+### Egress Bills
+A tunnel without compression moves the bill rather than lowering it. Every browser that used to talk to Sentry directly now talks to your server, so traffic that was never yours becomes egress you pay for — and if your application runs in AWS or Google Cloud while Sentry lives somewhere else, you pay a cloud egress rate on all of it.
+
+Compression is what makes the tunnel worth running: the same events leave your network Brotli-compressed. Tracing sharpens this well beyond error reporting, because spans arrive continuously and in bulk rather than only when something breaks.
+
+How much you save depends on what your SDKs send. Text-heavy envelopes — stack traces, breadcrumbs, span payloads — compress well; anything an SDK already compressed will not shrink much further, so measure your own mix. Every request logs `original -> compressed, ratio, ms`, which is the measurement.
+
+### Self-Hosted Sentry
+A self-hosted Sentry is not a special case: point `SENTRY_HOST` at your own instance instead of `*.ingest.sentry.io`. If it answers on an internal address over plain HTTP, add `SENTRY_HOST_PROTO=http` and the tunnel is the only component that needs to reach it.
+
+```bash
+docker run -d -p 7878:7878 \
+  -e SENTRY_HOST=sentry.internal:9000 \
+  -e SENTRY_HOST_PROTO=http \
+  appmasterio/sentry-tunnel:v1.0.0
+```
+
+This is how the author runs it: browsers post to `/s` on a public nginx, which forwards to the tunnel, which forwards to a self-hosted Sentry that is not exposed at all.
 
 ### Network Restrictions
 Some corporate networks or regions may block direct connections to Sentry. A tunnel on your own infrastructure bypasses these restrictions.

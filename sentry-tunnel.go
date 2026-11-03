@@ -58,6 +58,7 @@ type config struct {
 	handlerPath       string
 	compressionLevel  int
 	allowedProjectIDs []string
+	logRequests       bool
 }
 
 func loadConfig() config {
@@ -103,6 +104,16 @@ func loadConfig() config {
 		}
 	}
 
+	// Off by default: a line per forwarded request is the bulk of the log on a
+	// busy tunnel and buries the errors.
+	if v := os.Getenv("LOG_REQUESTS"); v != "" {
+		if on, err := strconv.ParseBool(v); err == nil {
+			cfg.logRequests = on
+		} else {
+			log.Printf("Invalid LOG_REQUESTS, request logging stays off: %v", err)
+		}
+	}
+
 	return cfg
 }
 
@@ -123,7 +134,7 @@ func compressBody(body []byte, compressionLevel int) ([]byte, error) {
 }
 
 // proxyToSentry compresses the body, sends the request to upstream, and writes the response
-func proxyToSentry(w http.ResponseWriter, r *http.Request, body []byte, upstreamURL string, compressionLevel int, hostHeader string, logPrefix string) {
+func proxyToSentry(w http.ResponseWriter, r *http.Request, body []byte, upstreamURL string, compressionLevel int, hostHeader string, logPrefix string, logRequest bool) {
 	proxyReq, err := http.NewRequest(http.MethodPost, upstreamURL, nil)
 	if err != nil {
 		log.Printf("Error creating proxy request: %v", err)
@@ -151,8 +162,10 @@ func proxyToSentry(w http.ResponseWriter, r *http.Request, body []byte, upstream
 		compressionRatio = float64(originalSize) / float64(compressedSize)
 	}
 
-	log.Printf("%s: %d -> %d, %.2f, %d ms",
-		logPrefix, originalSize, compressedSize, compressionRatio, compressionTime)
+	if logRequest {
+		log.Printf("%s: %d -> %d, %.2f, %d ms",
+			logPrefix, originalSize, compressedSize, compressionRatio, compressionTime)
+	}
 
 	// Set Content-Encoding header to Brotli
 	proxyReq.Header.Set("Content-Encoding", "br")
@@ -190,7 +203,7 @@ func main() {
 		}
 
 		upstreamURL := fmt.Sprintf("%s://%s%s", cfg.sentryHostProto, cfg.sentryHost, r.URL.Path)
-		proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Envelope")
+		proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Envelope", cfg.logRequests)
 	})
 
 	mux.HandleFunc(cfg.handlerPath, func(w http.ResponseWriter, r *http.Request) {
@@ -245,7 +258,7 @@ func main() {
 		}
 
 		upstreamURL := fmt.Sprintf("%s://%s/api/%s/envelope/", cfg.sentryHostProto, cfg.sentryHost, projectID)
-		proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Tunnel")
+		proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Tunnel", cfg.logRequests)
 	})
 
 	// Setup server for graceful shutdown
@@ -256,7 +269,7 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("sentry-tunnel %s starting on port %s at path %s\n", version, cfg.port, cfg.handlerPath)
+		log.Printf("sentry-tunnel %s starting on port %s at path %s, request logging %t\n", version, cfg.port, cfg.handlerPath, cfg.logRequests)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}

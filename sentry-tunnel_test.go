@@ -53,6 +53,9 @@ func TestLoadConfig(t *testing.T) {
 				if len(cfg.allowedProjectIDs) != 0 {
 					t.Errorf("allowedProjectIDs = %v, want empty slice", cfg.allowedProjectIDs)
 				}
+				if cfg.logRequests {
+					t.Errorf("logRequests = true, want default false")
+				}
 			},
 		},
 		{
@@ -65,6 +68,7 @@ func TestLoadConfig(t *testing.T) {
 				"SENTRY_HOST_HEADER": "custom.header.com",
 				"COMPRESSION_LEVEL":  "5",
 				"PROJECT_IDS":        "123,456,789",
+				"LOG_REQUESTS":       "true",
 			},
 			validate: func(t *testing.T, cfg config) {
 				if cfg.sentryHost != "sentry.example.com" {
@@ -84,6 +88,9 @@ func TestLoadConfig(t *testing.T) {
 				}
 				if cfg.compressionLevel != 5 {
 					t.Errorf("compressionLevel = %d, want %d", cfg.compressionLevel, 5)
+				}
+				if !cfg.logRequests {
+					t.Errorf("logRequests = false, want true")
 				}
 				expectedIDs := []string{"123", "456", "789"}
 				if len(cfg.allowedProjectIDs) != len(expectedIDs) {
@@ -137,7 +144,7 @@ func TestLoadConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clear all relevant env vars
-			envKeys := []string{"SENTRY_HOST", "PROXY_PORT", "PROJECT_IDS", "PROXY_PATH", "SENTRY_HOST_PROTO", "SENTRY_HOST_HEADER", "COMPRESSION_LEVEL"}
+			envKeys := []string{"SENTRY_HOST", "PROXY_PORT", "PROJECT_IDS", "PROXY_PATH", "SENTRY_HOST_PROTO", "SENTRY_HOST_HEADER", "COMPRESSION_LEVEL", "LOG_REQUESTS"}
 			for _, key := range envKeys {
 				os.Unsetenv(key)
 			}
@@ -468,7 +475,7 @@ func TestAPIHandler(t *testing.T) {
 				}
 
 				upstreamURL := cfg.sentryHostProto + "://" + cfg.sentryHost + r.URL.Path
-				proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Envelope")
+				proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Envelope", cfg.logRequests)
 			})
 
 			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
@@ -704,7 +711,7 @@ func createTunnelHandler(cfg config) http.HandlerFunc {
 		}
 
 		upstreamURL := cfg.sentryHostProto + "://" + cfg.sentryHost + "/api/" + projectID + "/envelope/"
-		proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Tunnel")
+		proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Tunnel", cfg.logRequests)
 	}
 }
 
@@ -759,7 +766,7 @@ func TestProxyToSentryUpstreamError(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	// Use an invalid upstream URL to trigger connection error
-	proxyToSentry(rec, req, []byte("test body"), "http://localhost:99999/invalid", brotli.BestSpeed, "test.host", "Test")
+	proxyToSentry(rec, req, []byte("test body"), "http://localhost:99999/invalid", brotli.BestSpeed, "test.host", "Test", false)
 
 	if rec.Code != http.StatusBadGateway {
 		t.Errorf("Status code = %d, want %d for unreachable upstream", rec.Code, http.StatusBadGateway)
@@ -806,7 +813,7 @@ func TestConcurrentRequests(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		defer r.Body.Close()
 		upstreamURL := cfg.sentryHostProto + "://" + cfg.sentryHost + r.URL.Path
-		proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Test")
+		proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Test", cfg.logRequests)
 	})
 
 	for i := 0; i < requestCount; i++ {
@@ -859,7 +866,7 @@ func TestHeadersPassedToUpstream(t *testing.T) {
 	body, _ := io.ReadAll(req.Body)
 	upstreamURL := cfg.sentryHostProto + "://" + cfg.sentryHost + "/api/test/"
 	req.Body = io.NopCloser(strings.NewReader("test"))
-	proxyToSentry(rec, req, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Test")
+	proxyToSentry(rec, req, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Test", cfg.logRequests)
 
 	// Verify headers
 	expectedHeaders := map[string]string{
@@ -1071,7 +1078,7 @@ func BenchmarkHandler(b *testing.B) {
 		body, _ := io.ReadAll(r.Body)
 		defer r.Body.Close()
 		upstreamURL := cfg.sentryHostProto + "://" + cfg.sentryHost + r.URL.Path
-		proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Test")
+		proxyToSentry(w, r, body, upstreamURL, cfg.compressionLevel, cfg.sentryHostHeader, "Test", cfg.logRequests)
 	})
 
 	testBody := `{"dsn":"https://key@sentry.io/123"}` + "\n" + `{"event_id":"abc123"}`

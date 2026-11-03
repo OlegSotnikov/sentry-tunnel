@@ -16,7 +16,7 @@ A tunnel without compression moves the bill rather than lowering it. Every brows
 
 Compression is what makes the tunnel worth running: the same events leave your network Brotli-compressed. Tracing sharpens this well beyond error reporting, because spans arrive continuously and in bulk rather than only when something breaks.
 
-How much you save depends on what your SDKs send. Text-heavy envelopes — stack traces, breadcrumbs, span payloads — compress well; anything an SDK already compressed will not shrink much further, so measure your own mix. Every request logs `original -> compressed, ratio, ms`, which is the measurement.
+How much you save depends on what your SDKs send. Text-heavy envelopes — stack traces, breadcrumbs, span payloads — compress well; anything an SDK already compressed will not shrink much further, so measure your own mix. With `LOG_REQUESTS=true` every request logs `original -> compressed, ratio, ms`, which is the measurement.
 
 ### Self-Hosted Sentry
 A self-hosted Sentry is not a special case: point `SENTRY_HOST` at your own instance instead of `*.ingest.sentry.io`. If it answers on an internal address over plain HTTP, add `SENTRY_HOST_PROTO=http` and the tunnel is the only component that needs to reach it.
@@ -120,6 +120,7 @@ export SENTRY_HOST=o123456.ingest.sentry.io
 | `SENTRY_HOST_HEADER` | No | `SENTRY_HOST` | Host header sent to Sentry |
 | `COMPRESSION_LEVEL` | No | `11` | Brotli compression level (0-11) |
 | `PROJECT_IDS` | No | - | Comma-separated allowed project IDs |
+| `LOG_REQUESTS` | No | `false` | Log a line per forwarded request (compression stats) |
 
 ### Compression Levels
 
@@ -216,7 +217,9 @@ Add rate limiting at your reverse proxy to prevent abuse.
 
 ## Logging
 
-Each request logs compression statistics:
+Errors, rejected requests and start/stop are always logged. Per-request lines
+are off by default — on a busy tunnel they are most of the log. With
+`LOG_REQUESTS=true` each request logs compression statistics:
 
 ```
 Tunnel: 15234 -> 1892, 8.05, 12 ms
